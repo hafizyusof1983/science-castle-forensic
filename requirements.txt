@@ -1,0 +1,4 @@
+streamlit
+face_recognition
+opencv-python-headless
+numpy
