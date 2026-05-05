@@ -1,6 +1,7 @@
-cmake
-dlib==19.24.2
-face_recognition
 streamlit
+mediapipe
+deepface
+tf-keras
 opencv-python-headless
 numpy
+Pillow
