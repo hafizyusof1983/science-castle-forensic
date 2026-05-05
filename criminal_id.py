@@ -5,10 +5,17 @@ import numpy as np
 import sqlite3
 import json
 from PIL import Image
-from deepface import DeepFace # Alternatif dlib yang sangat stabil di cloud
-import os
 
-# --- 1. DATABASE SETUP ---
+# --- 1. INITIALIZE MEDIAPIPE ---
+mp_face_mesh = mp.solutions.face_mesh
+face_mesh = mp_face_mesh.FaceMesh(
+    static_image_mode=True, 
+    max_num_faces=1, 
+    refine_landmarks=True,
+    min_detection_confidence=0.5
+)
+
+# --- 2. DATABASE SETUP ---
 def init_db():
     conn = sqlite3.connect('forensic_lab.db')
     cursor = conn.cursor()
@@ -19,7 +26,6 @@ def init_db():
 
 init_db()
 
-# --- 2. HELPER FUNCTIONS ---
 def get_all_suspects():
     conn = sqlite3.connect('forensic_lab.db')
     cursor = conn.cursor()
@@ -27,109 +33,100 @@ def get_all_suspects():
     data = cursor.fetchall()
     conn.close()
     
-    known_names = []
-    known_encodings = []
-    for name, encoding_str in data:
-        known_names.append(name)
-        known_encodings.append(json.loads(encoding_str))
-    return known_names, known_encodings
+    names, encodings = [], []
+    for name, enc_str in data:
+        names.append(name)
+        encodings.append(np.array(json.loads(enc_str)))
+    return names, encodings
 
-# --- 3. UI CONFIG & STYLING (Kekal seperti asal) ---
-st.set_page_config(page_title="Forensic ID", layout="centered", initial_sidebar_state="collapsed")
+# --- 3. BIOMETRIC ENGINE ---
+def get_face_signature(image_np):
+    """Menukar 468 titik wajah kepada vektor matematik (biometric fingerprint)"""
+    results = face_mesh.process(cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR))
+    if results.multi_face_landmarks:
+        landmarks = results.multi_face_landmarks[0].landmark
+        # Extract x, y, z coordinates for all 468 points
+        signature = np.array([[lm.x, lm.y, lm.z] for lm in landmarks]).flatten()
+        return signature
+    return None
+
+def compare_faces(current_sig, known_sigs, threshold=0.18):
+    """Membandingkan jarak Euclidean antara wajah semasa dengan pangkalan data"""
+    if not known_sigs:
+        return None, 0
+    
+    distances = [np.linalg.norm(current_sig - k_sig) for k_sig in known_sigs]
+    min_dist = min(distances)
+    if min_dist < threshold:
+        return distances.index(min_dist), min_dist
+    return None, min_dist
+
+# --- 4. UI STYLING ---
+st.set_page_config(page_title="Forensic ID", layout="centered")
 
 st.markdown("""
     <style>
-    [data-testid="stSidebar"] { background-color: #111827; }
-    .stButton>button {
-        display: block; width: 100% !important; border-radius: 12px;
-        height: 3.5em; background-color: white !important;
-        color: #111827 !important; font-weight: 700 !important;
-    }
-    .main-title { font-size: 40px; font-weight: 800; color: #111827; text-align: center; }
-    .mini-card { padding: 15px; border-radius: 15px; text-align: center; color: white !important; margin-bottom: 10px; }
-    .bg-status { background: linear-gradient(135deg, #10B981 0%, #059669 100%); }
-    .bg-profiles { background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%); }
-    .bg-mode { background: linear-gradient(135deg, #6366F1 0%, #4F46E5 100%); }
+    .main-title { font-size: 36px; font-weight: 800; color: #111827; text-align: center; }
+    .stButton>button { width: 100%; border-radius: 10px; height: 3em; font-weight: 700; }
+    .status-card { padding: 20px; border-radius: 15px; color: white; text-align: center; margin-bottom: 10px; }
+    .bg-blue { background: linear-gradient(135deg, #3B82F6, #2563EB); }
     </style>
     """, unsafe_allow_html=True)
 
-# --- NAVIGATION LOGIC ---
-if 'menu' not in st.session_state: st.session_state.menu = "Home"
+# --- 5. NAVIGATION ---
+if 'menu' not in st.session_state:
+    st.session_state.menu = "Home"
 
 with st.sidebar:
-    st.markdown("## 🕵️ Menu")
-    if st.button("🏠 Home Dashboard"): st.session_state.menu = "Home"; st.rerun()
-    if st.button("📝 Register Suspect"): st.session_state.menu = "Register"; st.rerun()
-    if st.button("🔍 Forensic Scan"): st.session_state.menu = "Scan"; st.rerun()
+    st.title("🕵️ Forensic Menu")
+    if st.button("🏠 Dashboard"): st.session_state.menu = "Home"
+    if st.button("📝 Daftar Suspek"): st.session_state.menu = "Register"
+    if st.button("🔍 Imbasan Lab"): st.session_state.menu = "Scan"
 
-st.markdown("<div class='main-title'>Forensic Lab</div>", unsafe_allow_html=True)
+st.markdown("<div class='main-title'>Forensic Intelligence Lab</div>", unsafe_allow_html=True)
 
-# Status Cards
-known_names, known_encodings = get_all_suspects()
-m_col1, m_col2, m_col3 = st.columns(3)
-with m_col1: st.markdown("<div class='mini-card bg-status'><b>Status</b><div>Active</div></div>", unsafe_allow_html=True)
-with m_col2: st.markdown(f"<div class='mini-card bg-profiles'><b>DB Profiles</b><div>{len(known_names)}</div></div>", unsafe_allow_html=True)
-with m_col3: st.markdown("<div class='mini-card bg-mode'><b>Mode</b><div>MediaPipe + DeepFace</div></div>", unsafe_allow_html=True)
+# --- 6. MODULES ---
+known_names, known_sigs = get_all_suspects()
 
-# --- MODULES ---
 if st.session_state.menu == "Home":
-    st.subheader("Project Overview")
-    st.info("Sistem ini menggunakan MediaPipe untuk pengesanan wajah pantas dan DeepFace (VGG-Face) untuk pengecaman identiti jenayah.")
+    st.markdown(f"<div class='status-card bg-blue'><b>Database Profiles</b><br><h2>{len(known_names)}</h2></div>", unsafe_allow_html=True)
+    st.write("Sistem pengecaman jenayah menggunakan analisis biometrik 468-titik wajah.")
 
 elif st.session_state.menu == "Register":
-    st.markdown("### 📝 New Registration")
-    with st.form("reg_form"):
-        new_name = st.text_input("Suspect Full Name")
-        upload_img = st.file_uploader("Upload Evidence Photo", type=['jpg', 'png'])
-        if st.form_submit_button("💾 Save Record"):
-            if new_name and upload_img:
-                # Simpan sementara untuk DeepFace
-                with open("temp.jpg", "wb") as f: f.write(upload_img.getbuffer())
-                try:
-                    # Ganti face_encodings dengan representasi DeepFace
-                    embeddings = DeepFace.represent(img_path="temp.jpg", model_name="VGG-Face")[0]["embedding"]
-                    encoding_str = json.dumps(embeddings)
-                    
+    st.subheader("Pendaftaran Rekod Jenayah")
+    with st.form("reg_form", clear_on_submit=True):
+        name = st.text_input("Nama Penuh Suspek")
+        file = st.file_uploader("Muat Naik Foto Evidence", type=['jpg', 'png'])
+        if st.form_submit_button("Simpan Biometrik"):
+            if name and file:
+                img = Image.open(file)
+                img_np = np.array(img.convert('RGB'))
+                sig = get_face_signature(img_np)
+                if sig is not None:
                     conn = sqlite3.connect('forensic_lab.db')
                     cursor = conn.cursor()
-                    cursor.execute("INSERT INTO suspects (name, encoding) VALUES (?, ?)", (new_name, encoding_str))
+                    cursor.execute("INSERT INTO suspects (name, encoding) VALUES (?, ?)", 
+                                 (name, json.dumps(sig.tolist())))
                     conn.commit()
                     conn.close()
-                    st.success(f"✅ {new_name} registered!")
-                except:
-                    st.error("Ralat: Wajah tidak dikesan dengan jelas.")
-                os.remove("temp.jpg")
+                    st.success(f"Rekod {name} berjaya disimpan!")
+                else:
+                    st.error("Wajah tidak dikesan. Sila gunakan gambar yang lebih jelas.")
 
 elif st.session_state.menu == "Scan":
-    st.markdown("### 🔍 Live Forensic Scan")
-    img_file = st.camera_input("Scan Subject Face")
-    if img_file:
-        img = Image.open(img_file)
+    st.subheader("Imbasan Forensik Masa Nyata")
+    camera_img = st.camera_input("Imbas Wajah")
+    if camera_img:
+        img = Image.open(camera_img)
         img_np = np.array(img.convert('RGB'))
-        img_path = "scan_temp.jpg"
-        cv2.imwrite(img_path, cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR))
+        current_sig = get_face_signature(img_np)
         
-        try:
-            # 1. Detect & Represent Face
-            current_emb = DeepFace.represent(img_path=img_path, model_name="VGG-Face")[0]["embedding"]
-            
-            found_name = "Unknown"
-            max_similarity = -1
-            
-            # 2. Manual Matching (Cosine Similarity)
-            for name, db_emb in zip(known_names, known_encodings):
-                # Kira dot product untuk similarity
-                sim = np.dot(current_emb, db_emb) / (np.linalg.norm(current_emb) * np.linalg.norm(db_emb))
-                if sim > 0.65 and sim > max_similarity: # Threshold 0.65
-                    max_similarity = sim
-                    found_name = name
-            
-            if found_name != "Unknown":
-                st.error(f"🚨 TARGET IDENTIFIED: {found_name} (Match: {max_similarity:.2%})")
+        if current_sig is not None:
+            idx, dist = compare_faces(current_sig, known_sigs)
+            if idx is not None:
+                st.error(f"🚨 PADANAN DIJUMPAI: {known_names[idx]}")
+                st.write(f"Tahap Keyakinan: {(1 - dist)*100:.2f}%")
             else:
-                st.warning("⚠️ No Match Found in Database")
-                
-        except:
-            st.error("No face detected. Please adjust position.")
-        
-        if os.path.exists(img_path): os.remove(img_path)
+                st.success("✅ Tiada rekod jenayah ditemui.")
+        else:
+            st.warning("Sila pastikan wajah berada di tengah kamera.")
