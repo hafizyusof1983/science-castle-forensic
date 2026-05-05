@@ -3,5 +3,3 @@ mediapipe
 opencv-python-headless
 numpy
 Pillow
-opencv-python-headless
-opencv-contrib-python-headless
